@@ -78,10 +78,16 @@ function fakePoller() {
     // eslint-disable-next-line @typescript-eslint/no-empty-function
     stop: () => {},
   };
+  // A real poll hands out a fresh EnvState object for the env it polled; every other emission reuses
+  // the previous one. So `set` and `repoll` are polls, and a bare `emit` re-polled nothing.
+  const fresh = (envs: Record<string, EnvState>): Record<string, EnvState> =>
+    Object.fromEntries(Object.entries(envs).map(([k, v]) => [k, { ...v }]));
+  const emit = (): void => { for (const cb of subs) cb(snap); };
   return {
     poller,
-    set: (envs: Record<string, EnvState>, sessions: SessionRow[]) => { snap = { envs, sessions }; },
-    emit: () => { for (const cb of subs) cb(snap); },
+    set: (envs: Record<string, EnvState>, sessions: SessionRow[]) => { snap = { envs: fresh(envs), sessions }; },
+    emit,
+    repoll: () => { snap = { envs: fresh(snap.envs), sessions: snap.sessions }; emit(); },
   };
 }
 
@@ -105,10 +111,42 @@ describe("createFleetMirror write policy", () => {
     fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_B)]);
     fp.emit(); // first observation: merge (all live) → both recorded, no pending
     fp.set({ e1: UP }, [row("e1", UUID_B), row("e1", UUID_C)]);
-    fp.emit(); // steady: replace
-    const ids = m.getState().envs.e1?.sessions.map((s) => s.sessionId);
-    expect(ids).toEqual([UUID_B, UUID_C]);
+    fp.emit(); // steady: C appears at once; A's first miss keeps it
+    expect(m.getState().envs.e1?.sessions.map((s) => s.sessionId)).toEqual([UUID_A, UUID_B, UUID_C]);
+    fp.repoll(); // A's second consecutive miss drops it
+    expect(m.getState().envs.e1?.sessions.map((s) => s.sessionId)).toEqual([UUID_B, UUID_C]);
     expect(m.getState().envs.e1?.pendingRestore).toBe(false);
+  });
+
+  it("one anomalous empty poll does not empty the mirror, and a record seen again resets its miss", () => {
+    const fp = fakePoller();
+    const m = createFleetMirror({ dataDir: tmpDir });
+    m.start(fp.poller);
+    fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_B)]);
+    fp.emit();
+    fp.set({ e1: UP }, []); // e.g. a herdr restart completing between two ticks
+    fp.emit();
+    expect(m.getState().envs.e1?.sessions).toHaveLength(2);
+    fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_B)]);
+    fp.emit(); // both back: misses reset
+    fp.set({ e1: UP }, []);
+    fp.emit(); // a fresh first miss, not a second
+    expect(m.getState().envs.e1?.sessions).toHaveLength(2);
+  });
+
+  it("an emission that did not re-poll the env is not a second miss", () => {
+    const fp = fakePoller();
+    const m = createFleetMirror({ dataDir: tmpDir });
+    m.start(fp.poller);
+    fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_B)]);
+    fp.emit();
+    fp.set({ e1: UP }, []); // one bad listing
+    fp.emit();
+    fp.emit(); // another env's poll, a registry tick, a sweep: e1's listing is the same stale one
+    fp.emit();
+    expect(m.getState().envs.e1?.sessions).toHaveLength(2);
+    fp.repoll(); // a real second poll of e1 that is still empty
+    expect(m.getState().envs.e1?.sessions).toHaveLength(0);
   });
 
   it("BLOCKER CASE: unreachable freezes; reachable-EMPTY after the gap merges (wipes nothing) and sets pendingRestore", () => {
@@ -156,7 +194,7 @@ describe("createFleetMirror write policy", () => {
     expect(m2.getState().envs.e1?.pendingRestore).toBe(false);
   });
 
-  it("while pending, polls never drop records; pending clears once every record is live again", () => {
+  it("while pending, polls never drop the pending record; it leaves pending once live again", () => {
     const fp = fakePoller();
     const m = createFleetMirror({ dataDir: tmpDir });
     m.start(fp.poller);
@@ -166,16 +204,102 @@ describe("createFleetMirror write policy", () => {
     fp.emit();
     fp.set({ e1: UP }, [row("e1", UUID_A)]); // mid-restore: only A back
     fp.emit();
-    expect(m.getState().envs.e1?.sessions).toHaveLength(2); // B kept for the re-run
-    expect(m.getState().envs.e1?.pendingRestore).toBe(true);
-    fp.emit(); // more pending polls change nothing
-    expect(m.getState().envs.e1?.sessions).toHaveLength(2);
-    fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_B)]); // fleet fully back
+    for (let i = 0; i < 5; i++) fp.repoll(); // restore may run much later
+    expect(m.getState().envs.e1?.sessions.map((s) => s.sessionId)).toEqual([UUID_A, UUID_B]);
+    expect(m.getState().envs.e1?.pendingIds).toEqual([UUID_B]);
+    fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_B)]); // B restored
     fp.emit();
     expect(m.getState().envs.e1?.pendingRestore).toBe(false);
-    fp.set({ e1: UP }, [row("e1", UUID_A)]); // next steady poll may replace again
+    fp.set({ e1: UP }, [row("e1", UUID_A)]); // B is ordinary now: two misses drop it
     fp.emit();
-    expect(m.getState().envs.e1?.sessions).toHaveLength(1);
+    fp.repoll();
+    expect(m.getState().envs.e1?.sessions.map((s) => s.sessionId)).toEqual([UUID_A]);
+  });
+
+  it("one of several pending records coming back changes only pendingIds, and is then ordinary", () => {
+    const fp = fakePoller();
+    const m = createFleetMirror({ dataDir: tmpDir });
+    m.start(fp.poller);
+    fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_B), row("e1", UUID_C)]);
+    fp.emit();
+    fp.set({ e1: DOWN }, []);
+    fp.emit();
+    fp.set({ e1: UP }, [row("e1", UUID_C)]);
+    fp.emit();
+    expect(m.getState().envs.e1?.pendingIds).toEqual([UUID_A, UUID_B]);
+    fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_C)]); // A restored, same metadata
+    fp.emit();
+    expect(readMirrorFile(mirrorPath(tmpDir))?.envs.e1?.pendingIds).toEqual([UUID_B]);
+    fp.set({ e1: UP }, [row("e1", UUID_C)]); // operator closes A
+    fp.emit();
+    fp.repoll();
+    expect(m.getState().envs.e1?.sessions.map((s) => s.sessionId)).toEqual([UUID_B, UUID_C]);
+  });
+
+  it("a session closed while ANOTHER record is pending still leaves the mirror (ADR 0008)", () => {
+    const fp = fakePoller();
+    const m = createFleetMirror({ dataDir: tmpDir });
+    m.start(fp.poller);
+    fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_B)]);
+    fp.emit();
+    fp.set({ e1: DOWN }, [row("e1", UUID_A), row("e1", UUID_B)]);
+    fp.emit();
+    fp.set({ e1: UP }, [row("e1", UUID_A)]); // back, B still missing and never returns
+    fp.emit();
+    fp.set({ e1: UP }, []); // operator closes A, which was live
+    fp.emit();
+    fp.repoll();
+    const env = m.getState().envs.e1;
+    expect(env?.sessions.map((s) => s.sessionId)).toEqual([UUID_B]);
+    expect(env?.pendingIds).toEqual([UUID_B]);
+  });
+
+  it("pendingIds survive a corral restart and are persisted sorted", () => {
+    const fp1 = fakePoller();
+    const m1 = createFleetMirror({ dataDir: tmpDir });
+    m1.start(fp1.poller);
+    fp1.set({ e1: UP }, [row("e1", UUID_C), row("e1", UUID_B), row("e1", UUID_A)]);
+    fp1.emit();
+    fp1.set({ e1: DOWN }, []);
+    fp1.emit();
+    fp1.set({ e1: UP }, [row("e1", UUID_B)]);
+    fp1.emit();
+    expect(readMirrorFile(mirrorPath(tmpDir))?.envs.e1?.pendingIds).toEqual([UUID_A, UUID_C]);
+    const fp2 = fakePoller();
+    const m2 = createFleetMirror({ dataDir: tmpDir });
+    m2.start(fp2.poller);
+    fp2.set({ e1: UP }, [row("e1", UUID_B)]);
+    fp2.emit();
+    fp2.repoll();
+    expect(m2.getState().envs.e1?.sessions).toHaveLength(3);
+    expect(m2.getState().envs.e1?.pendingIds).toEqual([UUID_A, UUID_C]);
+  });
+
+  it("loads a legacy mirror file with no pendingIds field and behaves under the new rule", () => {
+    const p = mirrorPath(tmpDir);
+    writeFileSync(p, JSON.stringify({
+      version: 1,
+      envs: {
+        e1: {
+          updatedAt: 1700000000, pendingRestore: true,
+          sessions: [
+            { sessionId: UUID_A, name: "a", cwd: "/repo", workspaceLabel: "acme:web" },
+            { sessionId: UUID_B, name: "b", cwd: "/repo", workspaceLabel: "acme:web" },
+          ],
+        },
+      },
+    }));
+    expect(() => readMirrorFile(p)).not.toThrow();
+    expect(readMirrorFile(p)?.envs.e1?.pendingIds).toEqual([]);
+
+    const fp = fakePoller();
+    const m = createFleetMirror({ dataDir: tmpDir });
+    expect(m.getState().envs.e1?.sessions).toHaveLength(2); // loaded intact, not moved aside
+    m.start(fp.poller);
+    fp.set({ e1: UP }, [row("e1", UUID_A)]); // first observation of THIS process: merge, pin B missing
+    fp.emit();
+    expect(m.getState().envs.e1?.sessions.map((s) => s.sessionId)).toEqual([UUID_A, UUID_B]);
+    expect(m.getState().envs.e1?.pendingRestore).toBe(true);
   });
 
   it("rows without a valid uuid never enter the mirror", () => {
@@ -196,13 +320,27 @@ describe("createFleetMirror write policy", () => {
     fp.emit();
     const first = readFileSync(mirrorPath(tmpDir), "utf8");
     now += 60_000;
-    fp.emit(); // unchanged fleet
+    fp.repoll(); // unchanged fleet, really re-polled
     expect(readFileSync(mirrorPath(tmpDir), "utf8")).toBe(first); // no rewrite, updatedAt untouched
     now += 60_000;
     fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_B)]);
     fp.emit();
     const state = m.getState();
     expect(state.envs.e1?.updatedAt).toBe(Math.floor(now / 1000));
+  });
+
+  it("a first-miss poll keeps the record without rewriting the file", () => {
+    const fp = fakePoller();
+    let now = 1_000_000_000_000;
+    const m = createFleetMirror({ dataDir: tmpDir, nowFn: () => now });
+    m.start(fp.poller);
+    fp.set({ e1: UP }, [row("e1", UUID_A), row("e1", UUID_B)]);
+    fp.emit();
+    const first = readFileSync(mirrorPath(tmpDir), "utf8");
+    now += 60_000;
+    fp.set({ e1: UP }, [row("e1", UUID_A)]); // B's first miss
+    fp.emit();
+    expect(readFileSync(mirrorPath(tmpDir), "utf8")).toBe(first);
   });
 
   it("an env with no claude sessions and no prior entry is not written at all (404 no_mirror stays meaningful)", () => {

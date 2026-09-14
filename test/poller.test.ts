@@ -109,6 +109,22 @@ describe("createPoller", () => {
     await p.pollOnce();
     expect(cb).toHaveBeenCalled();
   });
+
+  // server/fleet-mirror.ts counts a miss only when an env's EnvState object is new, so this identity
+  // rule is what keeps one bad listing from counting twice.
+  it("a snapshot carries a new EnvState object only for the env that was just polled", async () => {
+    const list: ListFn = (e) => Promise.resolve([row(e.id, `${e.id}-1`)]);
+    const p = createPoller({ envs: [A, B], list });
+    const snaps: Snapshot[] = [];
+    p.onSnapshot((s) => { snaps.push(s); });
+    await p.refreshEnv("a");
+    await p.refreshEnv("b");
+    await p.refreshEnv("a");
+    const [first, second, third] = snaps;
+    expect(second?.envs.a).toBe(first?.envs.a);
+    expect(third?.envs.a).not.toBe(second?.envs.a);
+    expect(third?.envs.b).toBe(second?.envs.b);
+  });
 });
 
 describe("createPoller tab rename", () => {
@@ -523,6 +539,19 @@ describe("createPoller — registry join", () => {
     expect(patched?.waitingFor).toBe("input needed");
     expect(patched?.remoteControl).toBe(true);
     expect(patched?.registryStatus).toBe("ok");
+  });
+
+  it("a registry emission reuses the env's EnvState object (server/fleet-mirror.ts treats a new one as a poll)", async () => {
+    const p = createPoller({ envs: [A], list: () => Promise.resolve([rowWithSession(A.id, "p1", VALID_UUID)]) });
+    await p.pollOnce();
+    const before = p.getSnapshot();
+    const seen: Snapshot[] = [];
+    p.onSnapshot((s) => seen.push(s));
+    p.applyRegistry(A, ok([{ sessionId: VALID_UUID, status: "busy" }]));
+    const after = seen.at(-1);
+    expect(after).toBeDefined();
+    expect(after).not.toBe(before);
+    expect(after?.envs.a).toBe(before.envs.a);
   });
 
   it("lands claudeName and claudeNameUserSet from the record", async () => {
