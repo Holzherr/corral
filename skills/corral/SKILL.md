@@ -288,6 +288,30 @@ Write it for a competent stranger who has the repo but not the last hour:
 Point at files, commits, and card fields rather than pasting them. A brief that reads like a title
 ("continue the auth work") wastes the spawn.
 
+If the brief carries a report duty, see "Orchestrating executors" below — the spawned session finds
+your address in its `corral_whoami`; you need not write it.
+
+## Orchestrating executors
+
+`corral_spawn` records who spawned a session. The new session's `corral_whoami` then shows
+`spawned by: <name> (running|closed)` — an address, already resolved, that a brief's "report to me"
+can lean on instead of re-deriving one.
+
+- **Orchestrator**: state in the brief that you want a report when the work is done, and a message
+  if the executor is blocked on a decision only you can make. Nothing else to do — the address rides
+  along automatically.
+- **Executor**: "me" is the `spawned by:` line unless the brief names someone else; `SendMessage` the
+  report there.
+- **Do not send** when that line reads `(closed)`, carries an `account:` marker, says the name was
+  not captured, or when `SendMessage` itself answers that the name is ambiguous or unknown. Write the
+  card as usual instead — the log is the carrier that survives exactly these cases.
+- **Silence is not agreement.** A report crossing differing permission modes is held for the
+  receiving operator's approval (see "Talking to another session"); it not being challenged proves
+  nothing.
+- **A handoff breaks the chain.** A successor's `spawned by` is the session that handed off, usually
+  closed right after — not the orchestrator still waiting. A handoff that carries a report duty
+  forward names the orchestrator in the brief.
+
 ## When something is wrong
 
 - **No `corral_*` tools** — this session is not inside corral. Say so; do not improvise a substitute.
