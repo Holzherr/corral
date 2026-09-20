@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import type { BoardFrame, Task } from "@shared/board-schema";
+import { BOARD_BRIEF_MAX_CHARS } from "@shared/board-schema";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -13,6 +14,7 @@ function makeBoard(overrides: Partial<BoardFrame> = {}): BoardFrame {
     label: "Original name",
     columns: [{ id: "c1", label: "To do" }, { id: "c2", label: "Done", type: "closed" }],
     tasks: [],
+    brief: "", specsPath: "",
     spawnPresets: [{ id: "p1", text: "/plan" }],
     defaultSpawnPresetId: null,
     ...overrides,
@@ -270,5 +272,37 @@ describe("BoardSettingsModal — footer layout under a long disabled-reason plus
     while (node !== null && node.parentElement !== footer) node = node.parentElement;
     expect(node).not.toBeNull();
     if (node !== null) expect(node.contains(errorEl)).toBe(false);
+  });
+});
+
+describe("BoardSettingsModal: project brief and specs folder", () => {
+  it("shows the stored values and sends both back, trimmed, on save", async () => {
+    const onSave = vi.fn((_patch: SavePatch) => Promise.resolve());
+    const board = makeBoard({ brief: "Maths Garden is Tara's maths app.", specsPath: "maths-garden/specs" });
+    render(<BoardSettingsModal board={board} onSave={onSave} onDelete={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getByDisplayValue("Maths Garden is Tara's maths app.")).toBeDefined();
+    expect(screen.getByDisplayValue("maths-garden/specs")).toBeDefined();
+
+    fireEvent.change(screen.getByLabelText("Project brief"), { target: { value: "  Rewritten brief.  " } });
+    fireEvent.change(screen.getByLabelText("Specs folder"), { target: { value: "  specs  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => { expect(onSave).toHaveBeenCalled(); });
+    expect(onSave.mock.calls[0]?.[0].brief).toBe("Rewritten brief.");
+    expect(onSave.mock.calls[0]?.[0].specsPath).toBe("specs");
+  });
+
+  it("counts the brief against its cap and refuses a save over it, without calling onSave", async () => {
+    const onSave = vi.fn((_patch: SavePatch) => Promise.resolve());
+    render(<BoardSettingsModal board={makeBoard()} onSave={onSave} onDelete={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getByText(`0 / ${String(BOARD_BRIEF_MAX_CHARS)}`)).toBeDefined();
+    fireEvent.change(screen.getByLabelText("Project brief"), { target: { value: "x".repeat(BOARD_BRIEF_MAX_CHARS + 1) } });
+    expect(screen.getByText(`${String(BOARD_BRIEF_MAX_CHARS + 1)} / ${String(BOARD_BRIEF_MAX_CHARS)}`)).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => { expect(screen.getByText(/project brief is limited to/i)).toBeDefined(); });
+    expect(onSave).not.toHaveBeenCalled();
   });
 });

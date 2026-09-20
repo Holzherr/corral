@@ -23,7 +23,7 @@ const BOARD: BoardType = {
     { id: "c2", label: "Doing" },
     { id: "cdone", label: "Done", type: "closed" },
   ],
-  tasks: [], spawnPresets: [], defaultSpawnPresetId: null,
+  tasks: [], brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
 };
 
 const LIVE = {

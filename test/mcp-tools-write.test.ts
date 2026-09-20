@@ -12,6 +12,7 @@ const SID = "11111111-2222-3333-4444-555555555555";
 const SID_B = "99999999-8888-7777-6666-555555555555";
 const boundTask: WhoamiTask = {
   boardId: "board", boardLabel: "Board", taskId: "t_abcdefg", title: "T", description: "",
+  boardBrief: "", boardSpecsPath: "",
   status: "doing", priority: null,
   columns: [{ id: "todo", label: "Todo", closed: false }, { id: "doing", label: "Doing", closed: false }],
   sessions: [], logCount: 0, lastLogAtMs: null, spawnedBy: null,
@@ -36,7 +37,7 @@ const boards: Board[] = [{
   id: "board", label: "Board",
   columns: [{ id: "todo", label: "Todo" }, { id: "done", label: "Done", type: "closed" }],
   tasks: [{ id: "t_aaaaaaa", title: "Open one", description: "", status: "todo", priority: "p1", sessions: [], createdAt: 1, updatedAt: 1 , log: []}],
-  spawnPresets: [], defaultSpawnPresetId: null,
+  brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
 }];
 
 function stub(over: Partial<CorralClient>): CorralClient {
@@ -116,7 +117,7 @@ describe("bindHandler", () => {
       id: "board", label: "Board",
       columns: [{ id: "todo", label: "Todo" }, { id: "done", label: "Done", type: "closed" }],
       tasks: [{ id: "t_done001", title: "Shipped", description: "", status: "done", priority: null, sessions: [], createdAt: 1, updatedAt: 1 , log: []}],
-      spawnPresets: [], defaultSpawnPresetId: null,
+      brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
     }];
     const calls: unknown[] = [];
     const c = stub({ whoami: async () => unbound, boards: async () => closedBoards, attach: async (a) => { calls.push(a); } });
@@ -137,7 +138,7 @@ describe("bindHandler", () => {
       id: "board", label: "Board",
       columns: [{ id: "todo", label: "Todo" }, { id: "done", label: "Done", type: "closed" }],
       tasks: [{ id: "t_done001", title: "Shipped", description: "", status: "done", priority: null, sessions: [], createdAt: 1, updatedAt: 1 , log: []}],
-      spawnPresets: [], defaultSpawnPresetId: null,
+      brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
     }];
     const c = stub({ whoami: async () => unbound, boards: async () => closedBoards });
     const closedOut = await bindHandler({ client: c, identity: idOf(c) }, { boardId: "board", taskId: "t_done001" });

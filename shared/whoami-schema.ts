@@ -69,6 +69,10 @@ export const WhoamiColumnSchema = z.object({ id: z.string(), label: z.string(), 
 export const WhoamiTaskSchema = z.object({
   boardId: z.string(),
   boardLabel: z.string(),
+  // The board's project context: what the whole board is for, and where its specs live. Defaulted,
+  // not required, like every field here, because an MCP client talks to whatever server is running.
+  boardBrief: z.string().default(""),
+  boardSpecsPath: z.string().default(""),
   taskId: z.string(),
   title: z.string(),
   description: z.string(),

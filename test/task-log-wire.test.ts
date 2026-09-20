@@ -33,7 +33,7 @@ function board(): Board {
         workspaceLabel: "w", name: "worker-a", cwdSnapshot: "/repo", sessionId: SID,
       }],
     }],
-    spawnPresets: [], defaultSpawnPresetId: null,
+    brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
   };
 }
 

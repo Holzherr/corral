@@ -312,6 +312,8 @@ function taskBlock(boards: readonly Board[], snapshot: Snapshot, row: SessionRow
   return {
     boardId: found.board.id,
     boardLabel: found.board.label,
+    boardBrief: found.board.brief,
+    boardSpecsPath: found.board.specsPath,
     taskId: found.task.id,
     title: found.task.title,
     description: found.task.description,

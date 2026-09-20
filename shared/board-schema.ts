@@ -175,11 +175,21 @@ export const SpawnPresetSchema = z.object({
   text: z.string(),
 });
 
+// PATCH-boundary caps, here rather than in server/api.ts because the settings form counts against
+// the same numbers and `shared/` is the only module both sides may import (as LOG_ENTRY_TEXT_MAX).
+export const BOARD_BRIEF_MAX_CHARS = 4000;
+export const BOARD_SPECS_PATH_MAX_CHARS = 300;
+
 export const BoardSchema = z.object({
   id: z.string(),
   label: z.string(),
   columns: z.array(ColumnSchema),
   tasks: z.array(TaskSchema).default([]),
+  // Prepended to the brief of every session spawned from a card here. Uncapped for the same reason
+  // as SpawnPresetSchema.text: a `.max()` would make a board carrying a longer value unloadable.
+  brief: z.string().default(""),
+  // Repo-relative specs folder, e.g. "maths-garden/specs". Uncapped for the same reason as `brief`.
+  specsPath: z.string().default(""),
   // Defaults, never .optional(): a board written before these existed heals on parse, and every Board
   // value is uniformly shaped. A dangling defaultSpawnPresetId (matching no preset) is NOT resolved
   // here — that normalization lives only at the PATCH boundary (server/api.ts), so a board file

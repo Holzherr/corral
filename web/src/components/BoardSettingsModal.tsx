@@ -2,7 +2,7 @@ import { DndContext, PointerSensor, useSensor, useSensors, type DragEndEvent } f
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { BoardFrame, Column, SpawnPreset } from "@shared/board-schema";
-import { ColumnTypeSchema, defaultColumnId, generateColumnId, generateSpawnPresetId } from "@shared/board-schema";
+import { BOARD_BRIEF_MAX_CHARS, BOARD_SPECS_PATH_MAX_CHARS, ColumnTypeSchema, defaultColumnId, generateColumnId, generateSpawnPresetId } from "@shared/board-schema";
 import type { CSSProperties, JSX } from "react";
 import { useEffect, useState } from "react";
 
@@ -10,7 +10,7 @@ interface Props {
   readonly board: BoardFrame;
   // Returns a promise that REJECTS on a refused save, so handleSave can keep the modal open and
   // show the server's message instead of closing on a failure it never saw.
-  readonly onSave: (patch: { label?: string; columns?: Column[]; spawnPresets?: SpawnPreset[]; defaultSpawnPresetId?: string | null }) => Promise<void>;
+  readonly onSave: (patch: { label?: string; columns?: Column[]; brief?: string; specsPath?: string; spawnPresets?: SpawnPreset[]; defaultSpawnPresetId?: string | null }) => Promise<void>;
   // Same reject-on-refusal contract as onSave — a board_not_empty refusal (e.g. a task landed on the
   // board from another tab after this modal opened) surfaces through the same saveError channel.
   readonly onDelete: () => Promise<void>;
@@ -87,6 +87,8 @@ export function BoardSettingsModal({ board, onSave, onDelete, onClose }: Props):
   const [label, setLabel] = useState(board.label);
   const [columns, setColumns] = useState<Column[]>([...board.columns]);
   const [newColLabel, setNewColLabel] = useState("");
+  const [brief, setBrief] = useState(board.brief);
+  const [specsPath, setSpecsPath] = useState(board.specsPath);
   const [presets, setPresets] = useState<SpawnPreset[]>([...board.spawnPresets]);
   const [defaultPresetId, setDefaultPresetId] = useState<string | null>(board.defaultSpawnPresetId);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -168,6 +170,18 @@ export function BoardSettingsModal({ board, onSave, onDelete, onClose }: Props):
     // too-many presets) — they can't cover a 503/404/dropped connection, so a rejected `onSave` below
     // is what makes those visible, through this same saveError channel, instead of silent.
     if (label.trim() === "") { setSaveError("A board needs a name."); return; }
+    // Counted on the TRIMMED text, which is what the server stores: otherwise a brief the counter
+    // shows as over the cap saves fine, and one it shows as inside it is refused.
+    const briefText = brief.trim();
+    if (briefText.length > BOARD_BRIEF_MAX_CHARS) {
+      setSaveError(`The project brief is limited to ${String(BOARD_BRIEF_MAX_CHARS)} characters; this one is ${String(briefText.length)}.`);
+      return;
+    }
+    const specsText = specsPath.trim();
+    if (specsText.length > BOARD_SPECS_PATH_MAX_CHARS) {
+      setSaveError(`The specs folder is limited to ${String(BOARD_SPECS_PATH_MAX_CHARS)} characters; this one is ${String(specsText.length)}.`);
+      return;
+    }
     // Blank rows are dropped rather than rejected: an empty row is "I changed my mind", not an error.
     const kept = presets.filter((p) => p.text.trim() !== "").map((p) => ({ ...p, text: p.text.trim() }));
     // Says what the accepted format IS, and does not claim the offending text is a flag: the rule is a
@@ -195,6 +209,8 @@ export function BoardSettingsModal({ board, onSave, onDelete, onClose }: Props):
       await onSave({
         label: label.trim(),
         columns,
+        brief: briefText,
+        specsPath: specsText,
         spawnPresets: kept,
         defaultSpawnPresetId: kept.some((p) => p.id === defaultPresetId) ? defaultPresetId : null,
       });
@@ -253,6 +269,20 @@ export function BoardSettingsModal({ board, onSave, onDelete, onClose }: Props):
             onKeyDown={(e) => { if (e.key === "Enter") addColumn(); }} />
           <button onClick={addColumn} className="px-3 py-1 bg-muted text-foreground text-sm rounded hover:bg-muted/80">Add</button>
         </div>
+        <label className="block text-xs text-muted-foreground mb-1" htmlFor="board-brief">Project brief</label>
+        <textarea id="board-brief" rows={8}
+          className="w-full bg-background border border-border rounded px-3 py-2 text-foreground text-sm font-mono placeholder:text-muted-foreground/70"
+          placeholder="What this project is, what it is for, where its specs and backlog live, how cards are written."
+          value={brief} onChange={(e) => { setBrief(e.target.value); }} />
+        {/* The count is on the trimmed text, because that is the value handleSave sends and the server stores. */}
+        <p className={`text-[11px] mb-4 text-right ${brief.trim().length > BOARD_BRIEF_MAX_CHARS ? "text-destructive" : "text-muted-foreground"}`}>
+          {String(brief.trim().length)} / {String(BOARD_BRIEF_MAX_CHARS)}
+        </p>
+        <label className="block text-xs text-muted-foreground mb-1" htmlFor="board-specs-path">Specs folder</label>
+        <input id="board-specs-path"
+          className="w-full bg-background border border-border rounded px-3 py-2 text-foreground text-sm font-mono mb-1 placeholder:text-muted-foreground/70"
+          placeholder="specs" value={specsPath} onChange={(e) => { setSpecsPath(e.target.value); }} />
+        <p className="text-[11px] text-muted-foreground mb-4">Repo-relative, e.g. <code>maths-garden/specs</code>. Sessions read it from corral_whoami.</p>
         <label className="block text-xs text-muted-foreground mb-2">Start commands</label>
         <div className="space-y-2 mb-3">
           {presets.map((p) => (

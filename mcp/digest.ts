@@ -43,6 +43,12 @@ const TASK_DESCRIPTION_FULL_MAX = 40_000;
 // lacks it. That is what keeps an embedded "env:" / "card:" / "session id:" look-alike line INSIDE
 // the quoted block instead of being mistaken for one of formatCardDetail's real structural lines.
 const DESCRIPTION_LINE_PREFIX = "  | ";
+// The board brief's gutter, distinct from the description's and the log's for the same reason those
+// two differ: a reader must be able to tell which block a line came out of.
+const BOARD_BRIEF_LINE_PREFIX = "  ~ ";
+// The rendered project block's budget. The brief is capped at BOARD_BRIEF_MAX_CHARS on the PATCH
+// boundary only, so the stored value can be longer and the block is bounded here like every other.
+const BOARD_BRIEF_BLOCK_MAX = 8000;
 // The log's own gutter — deliberately DIFFERENT from the description's, so a reader (and a session
 // copying text back) can tell which block a line came out of. Same defence as above: every rendered
 // log line carries it, so no entry can produce a raw line that reads as one of formatCardDetail's
@@ -410,6 +416,39 @@ function describePreview(raw: string): string {
 }
 
 /**
+ * One gutter-prefixed block, bounded on the RENDERED text rather than the raw value.
+ *
+ * Bounding the raw text and then adding the gutter would let a newline-dense value leave here at ~5x
+ * the cap: 40 000 newlines is 40 000 raw chars but 40 001 lines, each costing the prefix plus a
+ * joining newline. Both writers are caller-settable strings with no stored cap, so that is a live
+ * shape rather than a hypothetical.
+ */
+function prefixedBlock(raw: string, prefix: string, budgetMax: number): { readonly shown: string[]; readonly truncated: boolean } {
+  const all = splitLines(raw);
+  const shown: string[] = [];
+  let budget = budgetMax;
+  let truncated = false;
+  for (const line of all) {
+    // Stop while a whole gutter still fits, not at zero: `truncate` would otherwise cut INSIDE the
+    // prefix and emit a row reading "  |…" or " …". No caller bytes reach such a row, so it is not an
+    // escape — but the block header promises every line below carries the gutter, and a session that
+    // mechanically strips it would carry the stub into a full-replacement write.
+    if (budget <= prefix.length) break;
+    // Each split segment carries no terminator of its own, so `emit`'s sweep is a no-op on it —
+    // splitting first is what preserves the structure that sweep would otherwise flatten.
+    const full = `${prefix}${line}`;
+    const kept = truncate(full, budget);
+    if (kept !== full) truncated = true;
+    shown.push(kept);
+    budget -= kept.length + 1; // +1: the newline `emit` will join with, charged to the same budget.
+  }
+  // Both assignments are load-bearing and neither implies the other: the one above is the only
+  // signal when the LAST line is the one cut (nothing is dropped, so the count check is false), and
+  // this one is the only signal when the budget runs out exactly at a line boundary with lines left.
+  return { shown, truncated: truncated || shown.length < all.length };
+}
+
+/**
  * The description as formatCardDetail renders it: the whole stored value, as its own delimited,
  * non-tabular block that preserves real line breaks instead of flattening them — see the block
  * comment on `TASK_DESCRIPTION_FULL_MAX` above for why that is the contract here.
@@ -422,33 +461,7 @@ function describePreview(raw: string): string {
  */
 function renderFullDescription(raw: string): string[] {
   if (raw === "") return ["description: (empty)"];
-  // The budget is spent on the RENDERED block, not on the raw value. Bounding the raw text and then
-  // adding the gutter would let a newline-dense description leave here at ~5x the cap: 40 000
-  // newlines is 40 000 raw chars but 40 001 lines, each costing four characters of prefix plus a
-  // joining newline. `description` is an unbounded z.string() any session on the board can set, so
-  // that is a live shape, not a hypothetical — and this is the one formatter with no row cap.
-  const all = splitLines(raw);
-  const shown: string[] = [];
-  let budget = TASK_DESCRIPTION_FULL_MAX;
-  let truncated = false;
-  for (const line of all) {
-    // Stop while a whole gutter still fits, not at zero: `truncate` would otherwise cut INSIDE the
-    // prefix and emit a row reading "  |…" or " …". No caller bytes reach such a row, so it is not an
-    // escape — but the block header promises every line below carries the gutter, and a session that
-    // mechanically strips it would carry the stub into a full-replacement write.
-    if (budget <= DESCRIPTION_LINE_PREFIX.length) break;
-    // Each split segment carries no terminator of its own, so `emit`'s sweep is a no-op on it —
-    // splitting first is what preserves the structure that sweep would otherwise flatten.
-    const full = `${DESCRIPTION_LINE_PREFIX}${line}`;
-    const kept = truncate(full, budget);
-    if (kept !== full) truncated = true;
-    shown.push(kept);
-    budget -= kept.length + 1; // +1: the newline `emit` will join with, charged to the same budget.
-  }
-  // Both assignments are load-bearing and neither implies the other: the one above is the only
-  // signal when the LAST line is the one cut (nothing is dropped, so the count check is false), and
-  // this one is the only signal when the budget runs out exactly at a line boundary with lines left.
-  if (shown.length < all.length) truncated = true;
+  const { shown, truncated } = prefixedBlock(raw, DESCRIPTION_LINE_PREFIX, TASK_DESCRIPTION_FULL_MAX);
   // The prefix is stated to the CONSUMER, not just to maintainers in the comment above. This reply
   // is the only full read a session has, and corral_task_update replaces the field wholesale — so a
   // session that copies back what it was shown, gutter and all, silently grows the stored value by
@@ -797,6 +810,30 @@ function formatSpawnedByLine(spawnedBy: WhoamiTask["spawnedBy"], selfAccount: st
   return `spawned by: ${spawnedBy.name} (${spawnedBy.running ? "running" : "closed"})${capturedNote}${accountMarker(selfAccount, spawnedBy.account)}`;
 }
 
+/**
+ * The board's project context, rendered ABOVE the card: the brief says what the product is and where
+ * its specs and backlog live, which is what makes a card's one-line title actionable.
+ *
+ * The brief is operator-authored prose, so it is rendered as DATA: its own gutter-prefixed block,
+ * like a description, so no line inside it can read as one of formatWhoami's structural rows.
+ * Nothing is emitted for a board with neither field set.
+ */
+function renderProject(t: WhoamiTask): string[] {
+  const brief = t.boardBrief.trim();
+  const specs = truncate(oneLine(t.boardSpecsPath.trim()), IDENTITY_FIELD_MAX);
+  if (brief === "" && specs === "") return [];
+  const out = [`Project: ${truncate(oneLine(t.boardLabel), IDENTITY_FIELD_MAX)} [${t.boardId}]`];
+  if (brief !== "") {
+    const { shown, truncated } = prefixedBlock(brief, BOARD_BRIEF_LINE_PREFIX, BOARD_BRIEF_BLOCK_MAX);
+    out.push(
+      `brief (${counts(brief)}${truncated ? ", TRUNCATED" : ""}; each line below carries a leading "${BOARD_BRIEF_LINE_PREFIX}" added by this tool):`,
+      ...shown,
+    );
+  }
+  if (specs !== "") out.push(`Specs: ${specs}`);
+  return out;
+}
+
 /** The whoami rendering. Compact but complete — this is the one call every session makes at start. */
 export function formatWhoami(w: WhoamiResolved): string {
   const s = w.session;
@@ -842,6 +879,7 @@ export function formatWhoami(w: WhoamiResolved): string {
     const shownSessions = t.sessions.slice(0, WHOAMI_SESSIONS_MAX);
     const sessionsDropped = t.sessions.length - shownSessions.length;
     lines.push(
+      ...renderProject(t),
       `card: ${t.boardId}/${t.taskId}  ${t.priority ?? "--"}  ${t.status}  ${title}`,
       columnsLine,
       describePreview(t.description),

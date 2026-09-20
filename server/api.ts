@@ -1,6 +1,8 @@
 import {
   type Board, type BoardState, type EnrichedTask,
   type GlobalState, type SessionLink, type Task,
+  BOARD_BRIEF_MAX_CHARS,
+  BOARD_SPECS_PATH_MAX_CHARS,
   ColumnSchema,
   DEFAULT_COLUMNS,
   LOG_ENTRY_TEXT_MAX,
@@ -28,7 +30,7 @@ import {
   SPAWN_TIMEOUT_MS, TASK_DESCRIPTION_MAX_CHARS, UPLOAD_ROOT, WS_ALLOWED_ORIGINS,
 } from "../config.ts";
 import type { HerdrEnv } from "../environments.ts";
-import { briefByteLength, cleanupBrief, composeBrief, START_COMMAND_FALLBACK, writeBrief } from "./brief.ts";
+import { briefByteLength, cleanupBrief, composeBrief, START_COMMAND_FALLBACK, withBoardBrief, writeBrief } from "./brief.ts";
 import { cardSignal } from "./card-signal.ts";
 import { syncClaudeThemeBase, syncRemoteClaudeThemeBase, ThemeModeSchema } from "./claude-theme.ts";
 import type { DiagnosticsStore } from "./diagnostics-store.ts";
@@ -213,6 +215,9 @@ const SpawnPresetPatchSchema = z.object({
 const PatchBoardBodySchema = z.object({
   label: z.string().min(1).optional(),
   columns: z.array(ColumnSchema).optional(),
+  // Trimmed before the cap, so trailing whitespace can never be what pushes a brief over it.
+  brief: z.string().trim().max(BOARD_BRIEF_MAX_CHARS, `brief exceeds ${String(BOARD_BRIEF_MAX_CHARS)} characters`).optional(),
+  specsPath: z.string().trim().max(BOARD_SPECS_PATH_MAX_CHARS, `specsPath exceeds ${String(BOARD_SPECS_PATH_MAX_CHARS)} characters`).optional(),
   spawnPresets: z.array(SpawnPresetPatchSchema).max(20).optional(),
   defaultSpawnPresetId: z.string().nullable().optional(),
 });
@@ -718,7 +723,7 @@ export function createApi(opts: {
       return c.json({ error: { code: "board_id_collision", generatedId: id } }, 409);
     }
     const board = await opts.storage.withBoard(id, () => {
-      const b = { id, label, columns: [...DEFAULT_COLUMNS], tasks: [], spawnPresets: [], defaultSpawnPresetId: null };
+      const b = { id, label, columns: [...DEFAULT_COLUMNS], tasks: [], brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null };
       return { board: b, result: b };
     });
     return c.json(board, 201);
@@ -741,7 +746,7 @@ export function createApi(opts: {
     if (!parsed.success) return c.json({ error: { code: "validation", message: parsed.error.message } }, 400);
     const bid = c.req.param("bid");
     if (!BID_RE.test(bid)) return c.json({ error: { code: "validation", message: "bad boardId" } }, 400);
-    const { label, columns, spawnPresets, defaultSpawnPresetId } = parsed.data;
+    const { label, columns, brief: boardBrief, specsPath, spawnPresets, defaultSpawnPresetId } = parsed.data;
     if (columns?.length === 0) {
       return c.json({ error: { code: "validation", message: "columns must not be empty" } }, 400);
     }
@@ -767,6 +772,8 @@ export function createApi(opts: {
         }
         updated = { ...updated, columns };
       }
+      if (boardBrief !== undefined) updated = { ...updated, brief: boardBrief };
+      if (specsPath !== undefined) updated = { ...updated, specsPath };
       if (spawnPresets !== undefined) updated = { ...updated, spawnPresets: [...spawnPresets] };
       if (defaultSpawnPresetId !== undefined) updated = { ...updated, defaultSpawnPresetId };
       // A default pointing at no preset is no default — resolve it here rather than leaving a dangling
@@ -1476,7 +1483,13 @@ export function createApi(opts: {
     if (brief !== undefined && startCommand !== undefined) {
       return c.json({ error: { code: "validation", message: "send either brief or startCommand, not both" } }, 400);
     }
-    const firstMessage = brief !== undefined ? composeBrief(brief) : startCommand;
+    // The board's project brief rides only the BRIEF path: a startCommand is delivered verbatim so a
+    // leading slash command sits at position 0, and prefixing it would stop Claude Code expanding it.
+    const composed = brief === undefined ? undefined : withBoardBrief(board.brief, composeBrief(brief), BRIEF_MAX_BYTES);
+    if (composed?.droppedBoardBrief === true) {
+      console.warn(`[brief] board brief dropped (over ${String(BRIEF_MAX_BYTES)} bytes with the card brief) board=${bid} task=${tid}`);
+    }
+    const firstMessage = composed === undefined ? startCommand : composed.text;
     const messageKind = brief !== undefined ? "brief" : "startCommand";
     let briefPath: string | undefined;
     if (firstMessage !== undefined) {

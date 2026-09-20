@@ -137,6 +137,7 @@ export function createStorage(dataDir: string): Storage {
         const board: Board = {
           id: "personal", label: "Personal",
           columns: [...DEFAULT_COLUMNS], tasks: [],
+          brief: "", specsPath: "",
           spawnPresets: [], defaultSpawnPresetId: null,
         };
         await fh.writeFile(JSON.stringify(board, null, 2), "utf8");

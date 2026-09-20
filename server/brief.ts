@@ -35,6 +35,22 @@ export function briefByteLength(text: string): number {
   return Buffer.byteLength(text, "utf8");
 }
 
+/** What withBoardBrief did, so the caller can report a dropped board brief instead of failing the spawn. */
+export interface BoardBriefComposition {
+  readonly text: string;
+  readonly droppedBoardBrief: boolean;
+}
+
+// Over the cap the board brief is dropped WHOLE rather than cut: half a project brief still reads as
+// a complete one, and the card's own brief is what the spawn was asked for.
+export function withBoardBrief(boardBrief: string, composed: string, maxBytes: number): BoardBriefComposition {
+  const project = boardBrief.trim();
+  if (project === "") return { text: composed, droppedBoardBrief: false };
+  const combined = `${project}\n\n${composed}`;
+  if (briefByteLength(combined) > maxBytes) return { text: composed, droppedBoardBrief: true };
+  return { text: combined, droppedBoardBrief: false };
+}
+
 /**
  * Write a brief and return its absolute path. The filename is generated server-side from `nanoid`,
  * so the caller influences no part of the path and the result is a single shell-safe token. The write

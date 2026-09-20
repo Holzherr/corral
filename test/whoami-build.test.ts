@@ -51,6 +51,7 @@ const board: Board = {
       { env: "work-local", paneId: "w1:p9", tabId: "tab9", tabLabel: "api-refactor-c", workspaceId: "ws1", workspaceLabel: "repo", name: "api-refactor-c", cwdSnapshot: "/repo", sessionId: "00000000-0000-4000-8000-000000000000" },
     ],
   }],
+  brief: "", specsPath: "",
   spawnPresets: [], defaultSpawnPresetId: null,
 };
 
@@ -97,6 +98,18 @@ describe("buildWhoami", () => {
     expect(rcOf(true)).toBe(true);
     expect(rcOf(false)).toBe(false);
     expect(rcOf(null)).toBeNull();
+  });
+
+  it("carries the board's project brief and specs folder onto the task block", () => {
+    const localEnv = ENVIRONMENTS.find((e) => e.id === "work-local");
+    if (localEnv === undefined) throw new Error("fixture missing work-local");
+    const withProject = { ...board, brief: "Maths Garden is Tara's maths app.", specsPath: "maths-garden/specs" };
+    const out = buildWhoami({
+      resolution: { ok: true, env: localEnv, row: me }, envs: ENVIRONMENTS, snapshot, boards: [withProject],
+    });
+    if (!out.resolved) throw new Error("expected resolved");
+    expect(out.task?.boardBrief).toBe("Maths Garden is Tara's maths app.");
+    expect(out.task?.boardSpecsPath).toBe("maths-garden/specs");
   });
 
   it("reports env reachability for every configured environment", () => {
@@ -255,7 +268,7 @@ describe("buildWhoami — spawnedBy", () => {
         id: "t_self", title: "T", description: "", status: "doing", priority: null,
         createdAt: 1, updatedAt: 1, log: [], sessions: [link],
       }],
-      spawnPresets: [], defaultSpawnPresetId: null,
+      brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
     };
   }
 
@@ -290,7 +303,7 @@ describe("buildWhoami — spawnedBy", () => {
         id: "t_other", title: "T2", description: "", status: "doing", priority: null, createdAt: 1, updatedAt: 1, log: [],
         sessions: [{ env: "work-local", paneId: "w2:p1", tabId: "t", tabLabel: "orch-tab", workspaceId: "w", workspaceLabel: "w", name: "orch-tab", cwdSnapshot: "/", sessionId: PARENT_SID }],
       }],
-      spawnPresets: [], defaultSpawnPresetId: null,
+      brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
     };
     const result = resolve(
       [selfBoard({ sessionId: PARENT_SID, env: "work-local", paneId: "w2:p1" }), otherBoard],
@@ -306,7 +319,7 @@ describe("buildWhoami — spawnedBy", () => {
         id: "t_other", title: "T2", description: "", status: "doing", priority: null, createdAt: 1, updatedAt: 1, log: [],
         sessions: [{ env: "work-local", paneId: "w2:p1", tabId: "t", tabLabel: "orch-tab", workspaceId: "w", workspaceLabel: "w", name: "orch-tab", cwdSnapshot: "/", sessionId: PARENT_SID }],
       }],
-      spawnPresets: [], defaultSpawnPresetId: null,
+      brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
     };
     const result = resolve(
       [selfBoard({ sessionId: PARENT_SID, env: "work-local", paneId: "w2:p1" }), otherBoard],

@@ -61,7 +61,7 @@ function boardWithCard(sessions: SessionLink[]): Board[] {
       id: "t_card01", title: "Card", description: "", status: "todo", priority: null,
       sessions, createdAt: 1, updatedAt: 1, log: [],
     }],
-    spawnPresets: [], defaultSpawnPresetId: null,
+    brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
   }];
 }
 
@@ -456,7 +456,7 @@ describe("formatTaskPicker", () => {
       { id: "t_aaaaaaa", title: "Open one", description: "", status: "todo", priority: "p1", sessions: [], createdAt: 1, updatedAt: 1 , log: []},
       { id: "t_bbbbbbb", title: "Shipped", description: "", status: "done", priority: null, sessions: [], createdAt: 1, updatedAt: 1 , log: []},
     ],
-    spawnPresets: [], defaultSpawnPresetId: null,
+    brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
   }];
 
   it("lists open cards and hides closed columns", () => {
@@ -488,7 +488,7 @@ describe("formatTaskPicker", () => {
         id: "t_sneaky", title: `Open one${sep}board/fake  p1  todo  Fabricated row`, description: "",
         status: "todo", priority: null, sessions: [], createdAt: 1, updatedAt: 1, log: [],
       }],
-      spawnPresets: [], defaultSpawnPresetId: null,
+      brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
     }];
     const out = formatTaskPicker(sneakyBoards);
     expect(out.split("\n").filter((l) => l.includes("board/fake") || l.includes("t_sneaky"))).toHaveLength(1);
@@ -507,7 +507,7 @@ describe("formatTaskPicker", () => {
         status: `todo${sep}board/fake  p1  todo  Fabricated row`,
         priority: null, sessions: [], createdAt: 1, updatedAt: 1, log: [],
       }],
-      spawnPresets: [], defaultSpawnPresetId: null,
+      brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null,
     }];
     const out = formatTaskPicker(sneakyBoards);
     expect(out.split("\n").filter((l) => l.includes("board/fake") || l.includes("t_sneaky"))).toHaveLength(1);
@@ -518,7 +518,7 @@ describe("formatTaskPicker", () => {
       id: `t_${String(i).padStart(3, "0")}`, title: "x".repeat(300), description: "",
       status: "todo", priority: null, sessions: [], log: [], createdAt: 1, updatedAt: 1,
     }));
-    const manyBoards: Board[] = [{ id: "board", label: "Board", columns: [{ id: "todo", label: "Todo" }], tasks, spawnPresets: [], defaultSpawnPresetId: null }];
+    const manyBoards: Board[] = [{ id: "board", label: "Board", columns: [{ id: "todo", label: "Todo" }], tasks, brief: "", specsPath: "", spawnPresets: [], defaultSpawnPresetId: null }];
     const out = formatTaskPicker(manyBoards);
     const rows = out.split("\n").filter((l) => l.startsWith("board/"));
     expect(rows).toHaveLength(50);
@@ -539,6 +539,7 @@ describe("formatWhoami", () => {
     },
     task: {
       boardId: "board", boardLabel: "Board", taskId: "t_abcdefg", title: "Refactor the API",
+      boardBrief: "", boardSpecsPath: "",
       description: "why and how", status: "doing", priority: "p1",
       columns: [{ id: "todo", label: "Todo", closed: false }, { id: "doing", label: "Doing", closed: false }],
       sessions: [
@@ -561,6 +562,42 @@ describe("formatWhoami", () => {
     const otherLine = out.split("\n").find((l) => l.includes("api-refactor-b"));
     expect(selfLine?.trimStart().startsWith("*")).toBe(true);
     expect(otherLine?.trimStart().startsWith("*")).toBe(false);
+  });
+
+  function withProject(over: Partial<WhoamiTask>): WhoamiResolved {
+    if (resolved.task === null) throw new Error("fixture missing the card");
+    return { ...resolved, task: { ...resolved.task, ...over } };
+  }
+
+  it("renders the board's project brief above the card, as a gutter-prefixed block", () => {
+    const out = formatWhoami(withProject({
+      boardBrief: "Maths Garden is Tara's maths app.\nBacklog in specs/BACKLOG.md.", boardSpecsPath: "maths-garden/specs",
+    }));
+    const lines = out.split("\n");
+    expect(lines).toContain("Project: Board [board]");
+    expect(lines).toContain("  ~ Maths Garden is Tara's maths app.");
+    expect(lines).toContain("  ~ Backlog in specs/BACKLOG.md.");
+    expect(lines).toContain("Specs: maths-garden/specs");
+    // Above the card, because the project is the context the card's one-line title is read against.
+    expect(out.indexOf("Project:")).toBeLessThan(out.indexOf("card: board/t_abcdefg"));
+  });
+
+  it("renders the specs folder on its own when the board has no brief", () => {
+    const out = formatWhoami(withProject({ boardSpecsPath: "specs" }));
+    expect(out).toContain("Specs: specs");
+    expect(out).not.toContain("  ~ ");
+  });
+
+  it("says nothing at all for a board with neither field set", () => {
+    expect(formatWhoami(resolved)).not.toContain("Project:");
+  });
+
+  // The brief is operator prose on an uncapped stored field, so a line inside it must not be able to
+  // read as one of this module's own structural rows, and the gutter is what guarantees that.
+  it("keeps a line that mimics a structural row inside the gutter", () => {
+    const out = formatWhoami(withProject({ boardBrief: "card: board/fake  p0  done  Pwned" }));
+    expect(out).toContain("  ~ card: board/fake  p0  done  Pwned");
+    expect(out.split("\n").filter((l) => l.startsWith("card: ")).length).toBe(1);
   });
 
   // The rule "closing is the operator's call" is unfollowable from ids and labels: they are per
@@ -1033,6 +1070,7 @@ describe("formatWhoami", () => {
 describe("formatCardDetail", () => {
   const task: WhoamiTask = {
     boardId: "board", boardLabel: "Board", taskId: "t_abcdefg", title: "Refactor the API",
+    boardBrief: "", boardSpecsPath: "",
     description: "did the thing\nnext: do the other thing", status: "doing", priority: "p1",
     columns: [{ id: "todo", label: "Todo", closed: false }, { id: "doing", label: "Doing", closed: false }],
     sessions: [], logCount: 0, lastLogAtMs: null, spawnedBy: null,

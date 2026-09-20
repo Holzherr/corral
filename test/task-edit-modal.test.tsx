@@ -14,6 +14,7 @@ function makeBoard(overrides: Partial<BoardFrame> = {}): BoardFrame {
     label: "Board one",
     columns: [{ id: "c1", label: "To do" }, { id: "c2", label: "Done", type: "closed" }],
     tasks: [],
+    brief: "", specsPath: "",
     spawnPresets: [],
     defaultSpawnPresetId: null,
     ...overrides,
