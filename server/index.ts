@@ -20,11 +20,12 @@ import { runLocalTool } from "./exec-tool.ts";
 import { createFleetMirror, ensureMirrorGitignore, mirrorPath } from "./fleet-mirror.ts";
 import { createFleetRestore } from "./fleet-restore.ts";
 import { createGit } from "./git.ts";
-import { closePane, defaultExec, listAllPanes, listWorkspaces, listWorkspacesStrict, readPane, workspaceClose } from "./herdr.ts";
+import { closePane, defaultExec, listAllPanes, listWorkspaces, listWorkspacesStrict, paneIdentity, readPane, workspaceClose } from "./herdr.ts";
 import { assertLoopback } from "./host-guard.ts";
 import { createPoller } from "./poller.ts";
 import { formatReport, resolveReapGrace, runPreflight } from "./preflight.ts";
 import { startReconciler } from "./reconcile.ts";
+import { startRemoteMcp } from "./remote-mcp/index.ts";
 import { readSelfVersion } from "./self-version.ts";
 import { spawnSession, type SpawnOpts, type SpawnResult } from "./spawn.ts";
 import { createStorage } from "./storage.ts";
@@ -35,6 +36,9 @@ import { attachWebSocketServer } from "./ws-attach.ts";
 import { startZombieReaper } from "./zombie-reaper.ts";
 
 assertLoopback(HOST);
+
+// An unreachable host must not hold Ctrl-C open while the teardown's ssh calls run.
+const SHUTDOWN_GRACE_MS = 5000;
 
 const { report, envs: ENVS, configLine: preflightConfigLine } = await runPreflight();
 console.error(formatReport(report.lines));
@@ -142,4 +146,19 @@ void (async () => {
   // Live-terminal WS attach rides the same loopback-only http server (assertLoopback above). SEC-1
   // Origin allowlist + SEC-2 rate/cap + SEC-3 reaping are all enforced inside attachWebSocketServer.
   attachWebSocketServer(server, { envs: ENVS, allowedOrigins: WS_ALLOWED_ORIGINS });
+
+  // After the http server is listening: a shim's first call resolves identity over that loopback.
+  const stopRemoteMcp = await startRemoteMcp({
+    envs: ENVS, poller, storage, paneLookup: paneIdentity,
+    baseUrl: `http://127.0.0.1:${String(PORT)}`,
+    intervalMs: CHEAP_INTERVAL_MS,
+  });
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.once(signal, () => {
+      // Awaited: the teardown is an ssh round trip, and exiting in the same tick would skip it.
+      const done = stopRemoteMcp().catch(() => undefined);
+      const deadline = new Promise((r) => setTimeout(r, SHUTDOWN_GRACE_MS));
+      void Promise.race([done, deadline]).then(() => { process.exit(0); });
+    });
+  }
 })();
