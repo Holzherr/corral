@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { HerdrEnv } from "../environments.ts";
 import type { RemoteChild, SpawnSsh } from "../server/remote-write.ts";
-import { remoteWriteTimeoutMs, writeRemoteFile } from "../server/remote-write.ts";
+import { remoteWriteTimeoutMs, runRemoteScript, writeRemoteFile } from "../server/remote-write.ts";
 
 const env: Extract<HerdrEnv, { kind: "remote" }> = {
   id: "e", label: "E", kind: "remote", sshHost: "host1", socket: "~/s.sock", herdrBin: "~/herdr",
@@ -112,13 +112,31 @@ describe("writeRemoteFile", () => {
     await expect(p).rejects.toThrow("ENOENT");
   });
 
+  it("rejects output beyond the capture cap instead of returning it truncated", async () => {
+    const f = fake();
+    const p = runRemoteScript(env, { script: "x", args: [], stdin: new Uint8Array(), timeoutMs: 1000, what: "probe", spawnFn: f.spawnFn });
+    f.out.emit("data", Buffer.alloc(200 * 1024, 65));
+    f.out.emit("data", Buffer.alloc(100 * 1024, 65));
+    f.child.emit("close", 0);
+    await expect(p).rejects.toThrow("more output than expected");
+  });
+
+  it("decodes a multibyte character split across chunks intact", async () => {
+    const f = fake();
+    const p = runRemoteScript(env, { script: "x", args: [], stdin: new Uint8Array(), timeoutMs: 1000, what: "probe", spawnFn: f.spawnFn });
+    const bytes = Buffer.from("Caf\u00e9", "utf8"); // the two bytes of the accented letter go out in separate chunks
+    f.out.emit("data", bytes.subarray(0, bytes.length - 1));
+    f.out.emit("data", bytes.subarray(bytes.length - 1));
+    f.child.emit("close", 0);
+    expect(await p).toBe("Caf\u00e9");
+  });
+
   it("scales the timeout with payload size", () => {
     expect(remoteWriteTimeoutMs(25 * 1024 * 1024)).toBeGreaterThan(remoteWriteTimeoutMs(1024));
   });
 });
 
-// Runs the REAL remote command under a local `sh` (the last ssh argument is exactly what the remote
-// login shell would receive), so the script itself is exercised, not just its argv.
+// Runs the real remote command under a local sh.
 describe("writeRemoteFile remote script (run under a local sh)", () => {
   function runLocally(tmp: string): SpawnSsh {
     return (_file, args) => spawn("sh", ["-c", args.at(-1) ?? ""], { env: { ...process.env, TMPDIR: tmp } });
