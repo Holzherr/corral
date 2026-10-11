@@ -385,6 +385,16 @@ export function createApi(opts: {
     return next();
   });
 
+  // Anti-CSRF: `c.req.json()` ignores Content-Type, so a cross-site `text/plain` POST (CORS-simple, no preflight) would land.
+  app.use("*", async (c, next) => {
+    const origin = c.req.header("origin");
+    const safe = c.req.method === "GET" || c.req.method === "HEAD" || c.req.method === "OPTIONS";
+    if (!safe && origin !== undefined && !allowedOrigins.includes(origin)) {
+      return c.json({ error: { code: "forbidden", message: "origin not allowed" } }, 403);
+    }
+    return next();
+  });
+
   app.get("/api/health", (c) => c.json({ ok: true }));
 
   // A remote that cannot be reached is logged and skipped so it never fails the toggle.

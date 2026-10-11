@@ -1897,6 +1897,28 @@ describe("Host-header guard middleware (#2 — anti-DNS-rebinding)", () => {
   });
 });
 
+describe("Origin guard middleware (anti-CSRF)", () => {
+  const evil = { origin: "https://evil.example", "content-type": "text/plain;charset=UTF-8" };
+  it("403s a cross-origin text/plain POST that would otherwise create a board", async () => {
+    const app = makeApi(tmpDir);
+    const res = await app.request("/api/boards", { method: "POST", headers: evil, body: JSON.stringify({ label: "csrf" }) });
+    expect(res.status).toBe(403);
+    expect((await (await app.request("/api/boards")).json() as unknown[]).length).toBe(0);
+  });
+  it("403s cross-origin fleet restore and Origin: null", async () => {
+    const app = makeApi(tmpDir);
+    expect((await app.request("/api/fleet/restore", { method: "POST", headers: evil, body: "" })).status).toBe(403);
+    expect((await app.request("/api/boards", { method: "POST", headers: { origin: "null" }, body: "{}" })).status).toBe(403);
+  });
+  it("allows an allowlisted Origin, no Origin (MCP/CLI), and cross-origin GETs", async () => {
+    const app = makeApi(tmpDir);
+    const body = JSON.stringify({ label: "ok" });
+    expect((await app.request("/api/boards", { method: "POST", headers: { origin: "http://127.0.0.1:8787" }, body })).status).toBe(201);
+    expect((await app.request("/api/boards", { method: "POST", body: JSON.stringify({ label: "ok2" }) })).status).toBe(201);
+    expect((await app.request("/api/health", { headers: { origin: "https://evil.example" } })).status).toBe(200);
+  });
+});
+
 describe("GET /read — throttle cache (#4)", () => {
   it("coalesces repeat reads within the TTL into a single herdr call", async () => {
     let calls = 0;
